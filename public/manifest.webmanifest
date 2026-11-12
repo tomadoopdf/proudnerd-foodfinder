@@ -1,0 +1,9 @@
+{
+  "name": "ProudNerdFoodfinder",
+  "short_name": "Foodfinder",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F2F3EF",
+  "theme_color": "#2443D6",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

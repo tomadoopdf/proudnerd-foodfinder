@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ProudNerdFoodfinder</title>
+<meta name="description" content="Findet kurzfristig Essen per Lieferdienst für Artists und Crew – Preise, Gebühren und Bewertungen im Vergleich.">
+<meta name="theme-color" content="#F2F3EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111317" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="6" width="28" height="20" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M2 12h28M9 6v20M23 6v20" stroke="currentColor" stroke-width="2"/></svg>
+      <span>ProudNerd<b>Foodfinder</b></span>
+    </div>
+    <button id="locBtn" class="loc" type="button" aria-haspopup="true" aria-controls="locPanel">
+      <span id="locDot" class="dot" data-state="wait"></span>
+      <span id="locText">Standort wird gesucht …</span>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="locPanel" class="panel" hidden aria-label="Standort">
+    <div class="panel-head">
+      <h2>Lieferadresse</h2>
+      <button class="ghost" type="button" data-close="locPanel">Schließen</button>
+    </div>
+    <div class="seg" role="radiogroup" aria-label="Standortmodus">
+      <button type="button" role="radio" id="modeLive" aria-checked="true">Live-GPS</button>
+      <button type="button" role="radio" id="modeFixed" aria-checked="false">Feste Adresse (Venue / Hotel)</button>
+    </div>
+    <p class="hint" id="liveHint">Aktualisiert sich automatisch, sobald ihr weiterfahrt. Gesucht wird immer rund um den aktuellen Ort.</p>
+    <form id="fixedForm" class="row" hidden>
+      <label class="grow" for="fixedAddr"><span class="lbl">Adresse</span>
+        <input id="fixedAddr" type="text" placeholder="z. B. Palladium, Schanzenstraße 40, Köln" autocomplete="street-address">
+      </label>
+      <button class="btn" type="submit">Übernehmen</button>
+    </form>
+    <dl class="locmeta" id="locMeta"></dl>
+  </section>
+
+  <section id="codePanel" class="panel" hidden aria-label="Team-Code">
+    <h2>Team-Code</h2>
+    <p class="hint">Diese Instanz ist geschützt. Den Code bekommst du vom Production Office.</p>
+    <form id="codeForm" class="row">
+      <label class="grow" for="codeInput"><span class="lbl">Code</span><input id="codeInput" type="password" autocomplete="off"></label>
+      <button class="btn" type="submit">Speichern</button>
+    </form>
+  </section>
+
+  <section class="crew" aria-label="Rider und Crew">
+    <div class="crew-head">
+      <h2>Wer isst mit?</h2>
+      <button class="ghost" type="button" id="editCrewBtn" aria-controls="crewPanel">Rider bearbeiten</button>
+    </div>
+    <div id="crewChips" class="chips"></div>
+  </section>
+
+  <section id="crewPanel" class="panel" hidden aria-label="Rider bearbeiten">
+    <div class="panel-head">
+      <h2>Rider &amp; Vorlieben</h2>
+      <button class="ghost" type="button" data-close="crewPanel">Fertig</button>
+    </div>
+    <p class="hint">Wird nur auf diesem Gerät gespeichert. Allergien behandelt der Agent als Pflicht.</p>
+    <div id="crewList" class="crew-list"></div>
+    <button class="btn alt" type="button" id="addPersonBtn">+ Person hinzufügen</button>
+  </section>
+
+  <section id="feed" class="feed" aria-live="polite"></section>
+</main>
+
+<form id="composer" class="composer">
+  <div class="composer-inner">
+    <div id="pasteInfo" class="paste-info" hidden></div>
+    <label for="msg" class="sr">Was soll bestellt werden?</label>
+    <textarea id="msg" rows="2" placeholder="Was wollen sie essen? Oder Chatverlauf hier einfügen …"></textarea>
+    <div class="composer-row">
+      <label class="mini" for="deadline"><span>bis</span><input id="deadline" type="time"></label>
+      <label class="mini" for="budget"><span>Budget €</span><input id="budget" type="number" min="0" step="5" inputmode="decimal" placeholder="–"></label>
+      <div class="quick" id="quick">
+        <button type="button" data-q="schnell, unter 30 Min.">Schnell</button>
+        <button type="button" data-q="vegan">Vegan</button>
+        <button type="button" data-q="möglichst günstig">Günstig</button>
+        <button type="button" data-q="gesund, leicht vor der Show">Vor der Show</button>
+      </div>
+      <button id="sendBtn" class="btn send" type="submit">Suchen</button>
+    </div>
+  </div>
+</form>
+
+<template id="optTpl">
+  <article class="opt">
+    <header class="opt-head">
+      <div class="opt-title">
+        <div class="tags"></div>
+        <h3 class="name"></h3>
+        <p class="sub"></p>
+      </div>
+      <div class="opt-total">
+        <span class="total"></span>
+        <span class="pp"></span>
+      </div>
+    </header>
+    <dl class="facts"></dl>
+    <table class="items"><tbody></tbody></table>
+    <div class="fees"></div>
+    <div class="also" hidden></div>
+    <p class="notes"></p>
+    <div class="actions"></div>
+  </article>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
