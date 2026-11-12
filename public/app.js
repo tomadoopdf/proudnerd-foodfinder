@@ -376,41 +376,87 @@
       return;
     }
 
-    const prog = el("div", "progress");
-    const working = el("div", "working"); working.append(el("span", "spin"), el("span", null, "KI-Suche läuft …"));
-    const ul = el("ul");
-    prog.append(working, ul); box.append(prog);
+    const working = el("div", "working"); working.append(el("span", "spin"), el("span", null, "KI liest die Nachricht …"));
+    box.append(working);
     box.scrollIntoView({ behavior: "smooth", block: "start" });
-
-    const body = {
-      message: text, history, location: loc, profiles: crew,
-      deadline: $("#deadline").value || null,
-      budget: $("#budget").value ? `${$("#budget").value} €` : null,
-    };
-    const emit = (type, d) => {
-      if (type !== "status") return;
-      const li = el("li"); li.append(el("span", "k", d.kind === "fetch" ? "Quelle" : "sucht"), el("span", "t", d.text || ""));
-      ul.append(li);
-    };
-
     try {
-      const out = await window.PNFF_AI.aiSearch(aiKey, body, emit);
+      const u = await window.PNFF_AI.understand(aiKey, { message: text, location: loc, profiles: crew, deadline: $("#deadline").value || null });
       working.remove();
-      if (ul.children.length) {
-        const details = el("details"); details.append(el("summary", null, `${ul.children.length} Suchschritte und Quellen`), ul); prog.append(details);
-      }
-      renderResult(box, out);
-      history.push({ role: "user", text });
-      history.push({ role: "assistant", text: out.result
-        ? `${out.result.summary}\nOptionen: ${out.result.options.map((o) => `${o.restaurant} (${o.platform}, ${money(o.total, o.currency)})`).join("; ")}`
-        : out.text });
+      renderUnderstood(box, u, loc, text);
     } catch (err) {
       working.remove();
-      box.append(el("div", "error", `${err.message || "Etwas ist schiefgelaufen."} Schnellsuche ohne KI:`));
+      box.append(el("div", "error", `${err.message || "Etwas ist schiefgelaufen."} Hier die Schnellsuche ohne KI:`));
       renderQuick(box, text, loc);
     } finally {
       busy = false; $("#sendBtn").disabled = false;
     }
+  }
+
+  function renderUnderstood(box, u, loc, rawText) {
+    const Q = window.PNFF_QUICK;
+    const sum = el("div", "summary");
+    const head = [u.summary, u.people_count ? `${u.people_count} Personen` : null, u.deadline ? `bis ${u.deadline}` : null].filter(Boolean).join(" · ");
+    sum.append(el("p", null, head || "Bestellliste"));
+    if (u.allergies.length) sum.append(el("p", "warn-line", `⚠ Allergien: ${u.allergies.join(", ")}`));
+    box.append(sum);
+
+    if (u.orders.length) {
+      const card = el("article", "opt");
+      card.append(el("h3", "name", "Bestellliste"));
+      const tb = el("tbody");
+      for (const o of u.orders) {
+        const tr = el("tr");
+        const extra = [o.diet, o.allergies ? `⚠ ${o.allergies}` : ""].filter(Boolean).join(" · ");
+        const w = el("td"); w.append(document.createTextNode(o.wants || "–"));
+        if (extra) w.append(el("div", "f", extra));
+        tr.append(el("td", "q", `${o.qty}×`), w, el("td", "f", o.who));
+        tb.append(tr);
+      }
+      const table = el("table", "items"); table.append(tb); card.append(table);
+      box.append(card);
+    }
+
+    if (u.questions.length) {
+      const q = el("div", "summary");
+      q.append(el("p", null, "Noch klären:"));
+      const ul = el("ul"); for (const x of u.questions) ul.append(el("li", null, x)); q.append(ul);
+      box.append(q);
+    }
+
+    for (const l of u.from_links) {
+      const card = el("article", "opt");
+      card.append(el("h3", "name", l.shop), el("p", "sub", [l.platform, l.items].filter(Boolean).join(" · ")));
+      if (l.url) { const act = el("div", "actions"); act.append(Object.assign(el("a", "btn", `In ${l.platform || "Shop"} öffnen`), { href: l.url, target: "_blank", rel: "noopener" })); card.append(act); }
+      box.append(card);
+    }
+    const linksInText = [...new Set(rawText.match(/https?:\/\/[^\s<>"')]+/g) || [])].filter((x) => !u.from_links.some((l) => l.url === x));
+    if (linksInText.length) {
+      const card = el("article", "opt"); card.append(el("h3", "name", "Links aus dem Chat"));
+      const act = el("div", "actions");
+      for (const x of linksInText) act.append(Object.assign(el("a", "btn", `${Q.platformOf(x)} öffnen`), { href: x, target: "_blank", rel: "noopener" }));
+      card.append(act); box.append(card);
+    }
+
+    const terms = u.searches.length ? u.searches : ["essen"];
+    terms.forEach((term, idx) => {
+      const card = el("article", "opt" + (idx === 0 ? " best" : ""));
+      const h = el("div", "opt-title");
+      h.append(el("h3", "name", `„${term}“ in allen Lieferdiensten`), el("p", "sub", loc?.city ? `rund um ${[loc.road || loc.short, loc.city].filter(Boolean).join(", ")}` : "Standort fehlt, Suche ohne Ort"));
+      card.append(h);
+      const act = el("div", "actions");
+      Q.linksFor(term, loc).forEach((l, i) => act.append(Object.assign(el("a", i === 0 ? "btn" : "btn alt", l.name), { href: l.url, target: "_blank", rel: "noopener" })));
+      card.append(act); box.append(card);
+    });
+    box.append(el("p", "notes", "Preise und Sterne vergleicht ihr direkt in den Apps. Die Bestellliste oben kann man 1:1 in den Warenkorb übernehmen."));
+
+    const note = [
+      `Bestellung${u.deadline ? ` bis ${u.deadline}` : ""}${loc?.label ? ` an ${loc.label}` : ""}`,
+      ...u.orders.map((o) => `- ${o.qty}× ${o.wants} (${o.who})${o.diet ? `, ${o.diet}` : ""}${o.allergies ? `, ALLERGIE ${o.allergies}` : ""}`),
+      ...(u.allergies.length ? [`ACHTUNG Allergien: ${u.allergies.join(", ")}`] : []),
+    ].join("\n");
+    const c = el("button", "ghost", "Bestellliste kopieren"); c.type = "button";
+    c.onclick = () => copy(c, note);
+    box.append(c);
   }
 
   $("#composer").onsubmit = (e) => {
@@ -420,7 +466,7 @@
     search(t);
   };
   function renderKeyState() {
-    $("#keyState").textContent = aiKey ? "KI-Suche an" : "Schnellsuche";
+    $("#keyState").textContent = aiKey ? "KI an" : "Schnellsuche";
     $("#keyState").dataset.on = aiKey ? "1" : "0";
     $("#keyInput").value = aiKey;
     $("#keyRemove").hidden = !aiKey;
@@ -434,26 +480,15 @@
   // ---------- Beispiel beim ersten Öffnen ----------
   function renderExample() {
     const feed = $("#feed");
-    const flag = el("div", "example-flag example", "Beispiel – Ergebnis mit KI-Suche");
-    const u = el("div", "msg-user pasted example", "[18:02] Tourmanager: Artist will vegan, Bowl o.ä., bis 19:15 im Backstage\n[18:03] Stage: Crew 6 Leute, Pizza passt\n[18:03] Stage: https://www.lieferando.de/…");
+    const flag = el("div", "example-flag example", "Beispiel");
+    const text = "[18:02] TM: Artist will vegan, Bowl o.ä., bis 19:15 im Backstage\n[18:03] Stage: Crew 6 Leute, Pizza passt\n[18:04] TM: Artist keine Nüsse!";
+    const u = el("div", "msg-user pasted example", text);
     const box = el("div", "agent example");
-    renderResult(box, {
-      result: {
-        summary: "Beispieldaten. Empfehlung: Bowls über Wolt für den Artist (schnellste Lieferung, 4,7★), Pizza für die Crew über Lieferando (günstigste pro Person).",
-        assumptions: ["Lieferung an aktuellen Standort", "Crew: 6 Personen, keine Allergien angegeben"],
-        people_count: 8,
-        options: [
-          { restaurant: "Green Bowl Kitchen", platform: "Wolt", order_url: null, cuisine: "Bowls · vegan", serves: 2, rating: 4.7, rating_count: 1240, eta_minutes: 30,
-            items: [{ name: "Tofu Teriyaki Bowl", qty: 2, price: 13.9, for: "Artist" }, { name: "Edamame", qty: 1, price: 4.5, for: "Artist" }],
-            subtotal: 32.3, delivery_fee: 1.99, service_fee: 0.99, total: 35.28, currency: "EUR", price_confidence: "belegt",
-            tags: ["Beste Wahl", "Schnellste", "vegan ok"], notes: "Auf Uber Eats 3,12 € teurer wegen höherer Servicegebühr.", also_on: [{ platform: "Uber Eats", total: 38.4, url: null }] },
-          { restaurant: "Pizzeria Due Fratelli", platform: "Lieferando", order_url: null, cuisine: "Pizza", serves: 6, rating: 4.5, rating_count: 3800, eta_minutes: 45,
-            items: [{ name: "Pizza Margherita", qty: 3, price: 9.5, for: "Crew" }, { name: "Pizza Diavola", qty: 3, price: 11.5, for: "Crew" }],
-            subtotal: 63, delivery_fee: 0, service_fee: 0.99, total: 63.99, currency: "EUR", price_confidence: "teilweise geschätzt",
-            tags: ["Günstigste p. P."], notes: "Ab 50 € liefert der Laden kostenlos.", also_on: [] },
-        ],
-      },
-    });
+    renderUnderstood(box, {
+      summary: "Artist vegan ohne Nüsse, Crew Pizza", people_count: 7, deadline: "19:15",
+      orders: [{ who: "Artist", qty: 1, wants: "vegane Bowl", diet: "vegan", allergies: "Nüsse" }, { who: "Crew", qty: 6, wants: "Pizza", diet: "", allergies: "" }],
+      allergies: ["Nüsse"], searches: ["vegane bowl", "pizza"], questions: [], from_links: [],
+    }, location || fixedLocation, text);
     feed.append(flag, u, box);
   }
 

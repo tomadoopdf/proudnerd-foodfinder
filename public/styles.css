@@ -193,3 +193,6 @@ input[type="text"], input[type="password"], input[type="number"], input[type="ti
   .total { font-size: 19px; }
   .quick { order: 3; flex-basis: 100%; }
 }
+
+.warn-line { color: var(--hot); font-weight: 600; }
+.items td .f { padding-left: 0; white-space: normal; }

@@ -117,5 +117,5 @@
     return searchTerms(p, text, profiles).map((term) => ({ term, links: linksFor(term, location) }));
   }
 
-  window.PNFF_QUICK = { parse, buildSearches, platformOf };
+  window.PNFF_QUICK = { parse, buildSearches, linksFor, platformOf };
 })();

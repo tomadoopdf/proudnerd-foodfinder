@@ -1,205 +1,86 @@
+// ProudNerdFoodfinder – KI versteht den Chat (kostenlos über Google Gemini, Gratistarif).
+// Die KI macht aus Freitext oder eingefügten Chatverläufen eine saubere Bestellliste pro Person
+// und passende Suchbegriffe. Gesucht wird dann direkt in den Lieferdienst-Apps.
 (() => {
-// ProudNerdFoodfinder – KI-Suche im Browser (optional, kostenlos über Google Gemini).
-// Nutzt Gemini mit Google-Suche + URL-Kontext, um Lieferoptionen in der Nähe zu finden,
-// Preise inkl. Gebühren zu vergleichen und Bewertungen einzubeziehen.
-// Kostenloser Tarif: Google-Suche ist bei gemini-2.5-flash-lite bis 500 Anfragen/Tag gratis.
+  const MODEL = "gemini-3.5-flash-lite";
+  const API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
-const MODEL = "gemini-2.5-flash-lite";
-const API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+  const SYSTEM = `Du bist der Catering-Runner einer Tour-Produktion. Du liest Essenswünsche von Artists und Crew, oft als eingefügter WhatsApp-/Slack-/Signal-Verlauf, manchmal chaotisch, mehrsprachig oder mit Tippfehlern.
+Mach daraus eine klare Bestellliste. Regeln:
+- Pro Person bzw. Gruppe ein Eintrag: wer, was genau, Menge, Ernährungsform, Allergien. "Crew 6 Leute" ist EIN Eintrag mit qty 6.
+- Spätere Nachrichten ändern frühere ("doch lieber Sushi") – nimm den letzten Stand.
+- Allergien und Unverträglichkeiten sind Pflicht. Sammle sie zusätzlich in "allergies".
+- Ergänze gespeicherte Rider-Profile, wenn die Person im Chat vorkommt oder als "isst mit" markiert ist.
+- "searches": 1 bis 3 kurze Suchbegriffe auf Deutsch, so wie man sie in Wolt/Lieferando eintippt (z. B. "vegane bowl", "pizza", "sushi vegetarisch"). Gleiche Küche nur einmal.
+- "questions": was fehlt und wichtig ist (z. B. Lieferadresse, Uhrzeit, Menge). Leer, wenn alles klar ist.
+- Wenn Links zu Läden im Text stehen und du sie lesen kannst, nimm Laden-Name und passende Gerichte mit Preis in "from_links" auf. Erfinde nichts.
+Antworte NUR mit einem JSON-Objekt in diesem Format:
+{"summary":"1 Satz","people_count":8,"deadline":"19:15 oder null","orders":[{"who":"Artist","qty":1,"wants":"vegane Bowl, ohne Koriander","diet":"vegan","allergies":"Nüsse"}],"allergies":["Nüsse"],"searches":["vegane bowl","pizza"],"questions":[],"from_links":[{"shop":"Name","platform":"Wolt","url":"https://…","items":"Tofu Bowl 13,90 €"}]}`;
 
-const JSON_FORMAT = `{
-  "summary": "1–3 Sätze: Empfehlung und warum",
-  "assumptions": ["Annahme 1", "…"],
-  "people_count": 8,
-  "options": [{
-    "restaurant": "Name",
-    "platform": "Wolt | Lieferando | Uber Eats | … | Direkt",
-    "order_url": "direkter Link zum Laden oder null",
-    "cuisine": "Küche",
-    "serves": 2,
-    "rating": 4.6, "rating_count": 1200, "eta_minutes": 35,
-    "items": [{"name": "Gericht", "qty": 2, "price": 12.9, "for": "Artist"}],
-    "subtotal": 25.8, "delivery_fee": 1.99, "service_fee": 0.99, "total": 28.78,
-    "currency": "EUR",
-    "price_confidence": "belegt | teilweise geschätzt | geschätzt",
-    "tags": ["Beste Wahl", "Günstigste", "Top bewertet", "Schnellste", "vegan ok"],
-    "notes": "Hinweise, z. B. Allergene oder unsichere Werte",
-    "also_on": [{"platform": "Uber Eats", "total": 31.5, "url": null}]
-  }]
-}
-Unbekannte Zahlen als null. "serves" = für wie viele Personen diese Bestellung ist.`;
-
-// Welche Lieferdienste in welchem Land typischerweise aktiv sind (Startpunkt, der Agent prüft live).
-const PLATFORMS_BY_COUNTRY = {
-  de: "Lieferando, Wolt, Uber Eats, foodora (nur einzelne Städte), Getir/Flink/REWE Lieferservice für Supermarkt-Sachen, Direktbestellung beim Restaurant",
-  at: "foodora, Lieferando, Wolt, Uber Eats (Wien), Direktbestellung",
-  ch: "Just Eat (eat.ch), Uber Eats, Smood, Wolt, Direktbestellung",
-  gb: "Deliveroo, Uber Eats, Just Eat, Getir",
-  nl: "Thuisbezorgd, Uber Eats, Deliveroo, Flink",
-  be: "Takeaway.com, Deliveroo, Uber Eats",
-  fr: "Uber Eats, Deliveroo, Just Eat",
-  es: "Glovo, Just Eat, Uber Eats",
-  it: "Glovo, Deliveroo, Just Eat, Uber Eats",
-  pl: "Pyszne.pl, Glovo, Wolt, Uber Eats, Bolt Food",
-  cz: "Wolt, foodora, Bolt Food",
-  dk: "Wolt, Just Eat",
-  se: "Foodora, Wolt, Uber Eats",
-  no: "Foodora, Wolt",
-  fi: "Wolt, Foodora",
-  us: "DoorDash, Uber Eats, Grubhub, Postmates, Instacart",
-};
-
-function systemPrompt() {
-  return `Du bist ProudNerdFoodfinder, der Catering-Runner einer Tour-Produktion. Du findest für Artists und Crew kurzfristig das bestmögliche Essen per Lieferdienst.
-
-So arbeitest du:
-1. Lies die Anfrage. Sie kann frei formuliert sein oder ein eingefügter Chatverlauf (WhatsApp, Slack, Signal …) mit mehreren Personen, Wünschen und Links. Zieh daraus: wer will was, Mengen, Ernährungsform, Allergien, Budget, Deadline, Lieferadresse. Was unklar ist, nimmst du sinnvoll an und schreibst es in "assumptions".
-2. Stehen Links zu Läden im Text, öffne sie über den URL-Kontext und prüfe Speisekarte, Preise, Mindestbestellwert, Liefergebühr, Bewertung und ob der Laden an die Adresse liefert.
-3. Suche mit der Google-Suche nach weiteren passenden Läden in der Nähe des Standorts, auf allen Lieferplattformen, die in der Region aktiv sind. Vergleiche denselben Laden über mehrere Plattformen hinweg, wenn er auf mehreren gelistet ist – die Preise und Gebühren unterscheiden sich oft.
-4. Rechne für jede Option den Endpreis: Summe der Gerichte + Liefergebühr + Servicegebühr + ggf. Aufschlag für Mindestbestellwert. Rechne pro Person.
-5. Bewerte: Preis, Bewertung (Sterne und Anzahl), Lieferzeit, wie gut es zu den Wünschen und Ernährungsvorgaben passt. Bei kurzfristigen Anfragen hat Lieferzeit Vorrang vor ein paar Euro Ersparnis. Unter ca. 4,0 Sternen oder mit sehr wenigen Bewertungen nur empfehlen, wenn es keine Alternative gibt, und das sagen.
-6. Gib am Ende GENAU EINEN JSON-Block aus (\`\`\`json … \`\`\`), mit 2 bis 5 Optionen, beste zuerst, in diesem Format:
-${JSON_FORMAT}
-Vor dem JSON-Block höchstens zwei kurze Sätze, danach nichts mehr.
-
-Regeln:
-- Erfinde keine Preise, Bewertungen oder Links. Wenn du einen Wert nicht belegen konntest, setz ihn auf null und schreib in "notes", dass er geschätzt bzw. unbekannt ist. Setz "price_confidence" ehrlich.
-- "order_url" ist der direkte Link zum Laden auf der jeweiligen Plattform (oder Website), so dass man dort nur noch in den Warenkorb legen und bezahlen muss. Nur URLs, die du tatsächlich gesehen hast.
-- Allergien sind Pflicht, keine Vorliebe. Wenn ein Gericht unsicher ist, sag es.
-- Du kannst selbst nicht bestellen oder bezahlen. Die Bestellung schickt der Nutzer in der App ab. Bereite deshalb die Warenkorb-Liste so vor, dass man sie 1:1 abtippen kann (Gericht, Variante, Menge, für wen).
-- Antworte auf Deutsch (oder in der Sprache der Anfrage), kurz und sachlich. Kein Smalltalk.
-- Länderhinweise zu Plattformen sind nur ein Startpunkt; prüfe, was vor Ort wirklich liefert.`;
-}
-
-function describeLocation(loc) {
-  if (!loc) return "Standort unbekannt – frag nach oder nimm die Stadt aus der Nachricht.";
-  const parts = [];
-  if (loc.label) parts.push(`Adresse: ${loc.label}`);
-  if (loc.lat != null) parts.push(`Koordinaten: ${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)} (±${Math.round(loc.accuracy || 0)} m)`);
-  if (loc.mode === "fixed") parts.push("Fixe Lieferadresse (Venue/Hotel), nicht der aktuelle GPS-Standort.");
-  const cc = (loc.country_code || "").toLowerCase();
-  if (PLATFORMS_BY_COUNTRY[cc]) parts.push(`Typische Lieferdienste in diesem Land: ${PLATFORMS_BY_COUNTRY[cc]}`);
-  return parts.join("\n");
-}
-
-function describeProfiles(profiles) {
-  const active = (profiles || []).filter((p) => p.active);
-  if (!active.length) return "Keine gespeicherten Rider/Profile ausgewählt.";
-  return active
-    .map((p) =>
-      `- ${p.name} (${p.role || "Crew"})` +
-      (p.diet ? ` | Ernährung: ${p.diet}` : "") +
-      (p.allergies ? ` | ALLERGIEN: ${p.allergies}` : "") +
-      (p.likes ? ` | mag: ${p.likes}` : "") +
-      (p.dislikes ? ` | mag nicht: ${p.dislikes}` : ""),
-    )
-    .join("\n");
-}
-
-/**
- * Führt eine Suche aus. `emit(type, data)` schickt Fortschritt an den Browser.
- * history: [{role:"user"|"assistant", text}] – frühere Runden als reiner Text.
- */
-async function aiSearch(key, { message, history = [], location, profiles, budget, deadline }, emit) {
-  if (!key) throw new Error("Kein Gemini-Schlüssel eingetragen.");
-
-  const now = new Date().toLocaleString("de-DE", { timeZone: location?.timezone || "Europe/Berlin" });
-  const context =
-    `Ortszeit: ${now}\n` +
-    `${describeLocation(location)}\n` +
-    (deadline ? `Essen muss da sein bis: ${deadline}\n` : "") +
-    (budget ? `Budget gesamt: ${budget}\n` : "") +
-    `Rider & Crew-Profile:\n${describeProfiles(profiles)}`;
-
-  const turns = [];
-  for (const h of history.slice(-8)) {
-    if (!h.text) continue;
-    turns.push({ type: h.role === "assistant" ? "model_output" : "user_input", content: [{ type: "text", text: h.text }] });
-  }
-  turns.push({ type: "user_input", content: [{ type: "text", text: `${context}\n\n--- Anfrage ---\n${message}` }] });
-
-  emit("status", { kind: "search", text: `Google-Suche rund um ${location?.city || "den Standort"} …` });
-
-  const body = {
-    model: MODEL,
-    system_instruction: systemPrompt(),
-    input: turns,
-    tools: [{ type: "google_search" }, { type: "url_context" }],
-    generation_config: { max_output_tokens: 8192 },
-    store: false,
-  };
-
-  const call = (b) => fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key, "Api-Revision": "2026-05-20" },
-    body: JSON.stringify(b),
-  });
-  let r = await call(body);
-  let data = await r.json().catch(() => ({}));
-  // Falls das Modell den URL-Kontext nicht kombinieren kann: nur mit Google-Suche erneut
-  if (r.status === 400) {
-    console.warn && console.warn("Gemini 400, versuche ohne url_context:", data?.error?.message);
-    r = await call({ ...body, tools: [{ type: "google_search" }] });
-    data = await r.json().catch(() => ({}));
-  }
-  if (!r.ok) {
-    const msg = data?.error?.message || `Google-API Fehler ${r.status}`;
-    if (r.status === 429) throw new Error("Tageslimit der kostenlosen Google-Suche erreicht oder zu viele Anfragen auf einmal. Kurz warten.");
-    throw new Error(msg);
+  function profilesText(profiles) {
+    const a = (profiles || []).filter((p) => p.active);
+    if (!a.length) return "keine";
+    return a.map((p) => `- ${p.name || "?"} (${p.role || "Crew"})${p.diet ? `, ${p.diet}` : ""}${p.allergies ? `, ALLERGIE: ${p.allergies}` : ""}${p.likes ? `, mag ${p.likes}` : ""}${p.dislikes ? `, mag nicht ${p.dislikes}` : ""}`).join("\n");
   }
 
-  // Suchanfragen und Quellen für die Fortschrittsanzeige
-  const steps = data.steps || [];
-  let text = "";
-  for (const st of steps) {
-    if (st.type === "google_search_call") for (const q of st.arguments?.queries || []) emit("status", { kind: "search", text: q });
-    if (st.type === "url_context_call") for (const u of st.arguments?.urls || []) emit("status", { kind: "fetch", text: u });
-    if (st.type === "model_output") {
-      for (const c of st.content || []) {
-        if (c.type !== "text") continue;
-        text += c.text;
-        for (const a of c.annotations || []) if (a.type === "url_citation" && a.url) emit("status", { kind: "fetch", text: a.title || a.url });
+  function parseJson(text) {
+    const m = /```(?:json)?\s*([\s\S]*?)```/.exec(text) || /(\{[\s\S]*\})/.exec(text);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch { return null; }
+  }
+
+  function clean(j) {
+    const s = (v) => (v == null ? "" : String(v));
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    return {
+      summary: s(j.summary),
+      people_count: Number.isFinite(+j.people_count) ? +j.people_count : null,
+      deadline: j.deadline && /\d/.test(j.deadline) ? s(j.deadline) : null,
+      orders: arr(j.orders).map((o) => ({ who: s(o.who) || "?", qty: Number.isFinite(+o.qty) && +o.qty > 0 ? +o.qty : 1, wants: s(o.wants), diet: s(o.diet), allergies: s(o.allergies) })),
+      allergies: arr(j.allergies).map(s).filter(Boolean),
+      searches: [...new Set(arr(j.searches).map(s).filter(Boolean))].slice(0, 3),
+      questions: arr(j.questions).map(s).filter(Boolean),
+      from_links: arr(j.from_links).map((l) => ({ shop: s(l.shop), platform: s(l.platform), url: /^https?:\/\//.test(l.url || "") ? l.url : null, items: s(l.items) })).filter((l) => l.shop),
+    };
+  }
+
+  async function understand(key, { message, location, profiles, deadline }) {
+    if (!key) throw new Error("Kein Google-KI-Schlüssel eingetragen.");
+    const hasLinks = /https?:\/\//.test(message);
+    const input =
+      `Lieferort: ${location?.label || location?.city || "unbekannt"}\n` +
+      (deadline ? `Deadline aus der App: ${deadline}\n` : "") +
+      `Gespeicherte Rider-Profile (isst mit):\n${profilesText(profiles)}\n\n--- Nachricht / Chatverlauf ---\n${message}`;
+    const body = { model: MODEL, system_instruction: SYSTEM, input, store: false };
+    if (hasLinks) body.tools = [{ type: "url_context" }];
+
+    let last;
+    let useTools = hasLinks;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+      const b = useTools ? body : { model: body.model, system_instruction: body.system_instruction, input: body.input, store: false };
+      const r = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(b),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        const text = (data.steps || []).filter((st) => st.type === "model_output")
+          .flatMap((st) => st.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+        const j = parseJson(text);
+        if (j) return clean(j);
+        last = new Error("Die KI hat keine lesbare Bestellliste geliefert.");
+        continue;
       }
+      // Gesperrte Shop-Seiten (z. B. Lieferando) lassen den Link-Abruf scheitern -> ohne Links weiter
+      if (useTools && (r.status === 403 || r.status === 400)) { useTools = false; attempt--; continue; }
+      if (r.status === 400 || r.status === 401 || r.status === 403) throw new Error("Der Google-KI-Schlüssel wird nicht akzeptiert. Oben auf „KI an“ tippen und prüfen.");
+      if (r.status === 429) throw new Error("Das kostenlose Google-Kontingent ist gerade ausgeschöpft. In einer Minute nochmal.");
+      last = new Error(r.status === 503 ? "Google-KI ist gerade überlastet." : (data?.error?.message || `Google-KI Fehler ${r.status}`));
     }
+    throw last;
   }
-  if (!text && data.output_text) text = data.output_text;
 
-  const result = parseResult(text);
-  const prose = text.replace(/```json[\s\S]*?```/g, "").trim();
-  return { result, text: result ? "" : prose || "Keine Antwort erhalten." };
-}
-
-function parseResult(text) {
-  const m = /```json\s*([\s\S]*?)```/.exec(text) || /(\{[\s\S]*"options"[\s\S]*\})/.exec(text);
-  if (!m) return null;
-  try {
-    const j = JSON.parse(m[1]);
-    if (!Array.isArray(j.options) || !j.options.length) return null;
-    const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
-    j.summary = String(j.summary || "");
-    j.assumptions = Array.isArray(j.assumptions) ? j.assumptions.map(String) : [];
-    j.people_count = num(j.people_count) || 1;
-    j.options = j.options.map((o) => ({
-      restaurant: String(o.restaurant || "Unbekannt"),
-      platform: String(o.platform || ""),
-      order_url: typeof o.order_url === "string" ? o.order_url : null,
-      cuisine: String(o.cuisine || ""),
-      serves: num(o.serves),
-      rating: num(o.rating), rating_count: num(o.rating_count), eta_minutes: num(o.eta_minutes),
-      items: (Array.isArray(o.items) ? o.items : []).map((i) => ({ name: String(i.name || ""), qty: num(i.qty) || 1, price: num(i.price), for: String(i.for || "") })),
-      subtotal: num(o.subtotal), delivery_fee: num(o.delivery_fee), service_fee: num(o.service_fee), total: num(o.total),
-      currency: /^[A-Z]{3}$/.test(o.currency || "") ? o.currency : "EUR",
-      price_confidence: ["belegt", "teilweise geschätzt", "geschätzt"].includes(o.price_confidence) ? o.price_confidence : "geschätzt",
-      tags: Array.isArray(o.tags) ? o.tags.map(String) : [],
-      notes: String(o.notes || ""),
-      also_on: (Array.isArray(o.also_on) ? o.also_on : []).map((a) => ({ platform: String(a.platform || ""), total: num(a.total), url: typeof a.url === "string" ? a.url : null })),
-    }));
-    return j;
-  } catch {
-    return null;
-  }
-}
-
-
-window.PNFF_AI = { aiSearch };
+  window.PNFF_AI = { understand };
 })();
