@@ -11,16 +11,41 @@
     { id: 1, name: "Artist", role: "Artist", diet: "vegan", allergies: "", likes: "", dislikes: "", active: true },
     { id: 2, name: "Crew", role: "Crew", diet: "", allergies: "", likes: "", dislikes: "", active: true },
   ]);
-  let teamCode = store.get("teamCode", "");
+  let aiKey = store.get("aiKey", "");
   let history = [];      // [{role, text}] für Folgefragen
   let location = null;   // {lat, lon, accuracy, city, ..., mode}
   let mode = store.get("locMode", "live");
   let fixedLocation = store.get("fixedLocation", null);
   let busy = false;
   let lastGeoAt = 0, lastGeoPos = null, watchId = null;
-  let config = { needsCode: false, demo: false };
 
-  const headers = () => ({ "Content-Type": "application/json", ...(teamCode ? { "X-Team-Code": teamCode } : {}) });
+  // ---------- Adresssuche über OpenStreetMap (direkt aus dem Browser) ----------
+  const NOMI = "https://nominatim.openstreetmap.org";
+  function pickAddr(a) {
+    return {
+      city: a.city || a.town || a.village || a.municipality || a.county || "",
+      region: a.state || "", postcode: a.postcode || "",
+      road: [a.road, a.house_number].filter(Boolean).join(" "),
+      country_code: (a.country_code || "").toLowerCase(),
+    };
+  }
+  async function reverseGeo(lat, lon) {
+    const r = await fetch(`${NOMI}/reverse?format=jsonv2&addressdetails=1&accept-language=de&lat=${lat}&lon=${lon}`);
+    if (!r.ok) throw new Error("Adresse nicht abrufbar");
+    const j = await r.json(); const o = pickAddr(j.address || {});
+    o.label = [o.road, [o.postcode, o.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+    return o;
+  }
+  async function forwardGeo(q) {
+    const one = async (qq) => {
+      const r = await fetch(`${NOMI}/search?format=jsonv2&addressdetails=1&limit=1&accept-language=de&q=${encodeURIComponent(qq)}`);
+      if (!r.ok) throw new Error("Adresssuche nicht erreichbar");
+      const [hit] = await r.json(); if (!hit) return null;
+      return { lat: +hit.lat, lon: +hit.lon, ...pickAddr(hit.address || {}), label: hit.display_name };
+    };
+    // Venue-Namen vorne kennt OSM oft nicht – dann ohne ersten Teil erneut
+    return (await one(q)) || (q.includes(",") ? await one(q.split(",").slice(1).join(",").trim()) : null);
+  }
 
   // ---------- Standort ----------
   function setLocUI(state, text) {
@@ -59,8 +84,7 @@
     if (moved || Date.now() - lastGeoAt > 5 * 60_000) {
       lastGeoPos = p; lastGeoAt = Date.now();
       try {
-        const r = await fetch(`/api/geo?lat=${p.lat}&lon=${p.lon}`, { headers: headers() });
-        if (r.ok) Object.assign(location, await r.json());
+        Object.assign(location, await reverseGeo(p.lat, p.lon));
       } catch {}
     }
     if (mode === "live") setLocUI("live", location.city ? `${location.city}${location.road ? " · " + location.road : ""}` : "Live-Standort");
@@ -97,9 +121,8 @@
     if (!q) return;
     setLocUI("wait", "Suche Adresse …");
     try {
-      const r = await fetch(`/api/geo?q=${encodeURIComponent(q)}`, { headers: headers() });
-      const j = await r.json();
-      if (!r.ok || j.error) throw new Error(j.error || "Adresse nicht gefunden");
+      const j = await forwardGeo(q);
+      if (!j) throw new Error("Adresse nicht gefunden");
       fixedLocation = { ...j, query: q, short: q.split(",")[0], mode: "fixed", updated: Date.now(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
       store.set("fixedLocation", fixedLocation);
       setMode("fixed");
@@ -285,69 +308,106 @@
     return b;
   }
 
+  function renderQuick(box, text, loc) {
+    const Q = window.PNFF_QUICK;
+    const p = Q.parse(text);
+    const sum = el("div", "summary");
+    const facts = [];
+    if (p.people) facts.push(`${p.people} Personen`);
+    if (p.diets.length) facts.push(p.diets.join(", "));
+    if (p.cuisines.length) facts.push(p.cuisines.join(", "));
+    if (p.deadline || $("#deadline").value) facts.push(`bis ${p.deadline || $("#deadline").value}`);
+    if (p.allergies.length) facts.push(`⚠ ohne ${p.allergies.join(", ")}`);
+    sum.append(el("p", null, facts.length ? `Erkannt: ${facts.join(" · ")}` : "Erkannt: allgemeine Essensanfrage"));
+    if (p.wishes.length) {
+      const ul = el("ul");
+      for (const w of p.wishes) if (!/^https?:/i.test(w.text)) ul.append(el("li", null, `${w.who}: ${w.text}`));
+      if (ul.children.length) sum.append(ul);
+    }
+    box.append(sum);
+
+    if (p.links.length) {
+      const card = el("article", "opt");
+      card.append(el("h3", "name", "Links aus dem Chat"));
+      const act = el("div", "actions");
+      for (const u of p.links) {
+        const a = Object.assign(el("a", "btn", `${Q.platformOf(u)} öffnen`), { href: u, target: "_blank", rel: "noopener" });
+        act.append(a);
+      }
+      card.append(act);
+      box.append(card);
+    }
+
+    Q.buildSearches(p, text, loc, crew).forEach(({ term, links }, idx) => {
+      const card = el("article", "opt" + (idx === 0 ? " best" : ""));
+      const head = el("div", "opt-title");
+      head.append(el("h3", "name", `„${term}“ in allen Lieferdiensten`), el("p", "sub", loc?.city ? `rund um ${[loc.road || loc.short, loc.city].filter(Boolean).join(", ")}` : "Standort fehlt, Suche ohne Ort"));
+      card.append(head);
+      const act = el("div", "actions");
+      links.forEach((l, i) => act.append(Object.assign(el("a", i === 0 ? "btn" : "btn alt", l.name), { href: l.url, target: "_blank", rel: "noopener" })));
+      card.append(act);
+      box.append(card);
+    });
+    box.append(el("p", "notes", "Öffnet die Suche direkt auf jeder Plattform; Preise und Sterne dort vergleichen. Automatischer Preis- und Bewertungsvergleich: oben auf „Schnellsuche“ tippen und einen kostenlosen Google-KI-Schlüssel eintragen."));
+
+    const note = [
+      `Bestellung${p.deadline ? ` bis ${p.deadline}` : ""}${loc?.label ? ` an ${loc.label}` : ""}`,
+      ...(p.wishes.length ? p.wishes.filter((w) => !/^https?:/i.test(w.text)).map((w) => `- ${w.who}: ${w.text}`) : [text]),
+      ...(p.allergies.length ? [`ACHTUNG Allergien: ${p.allergies.join(", ")}`] : []),
+    ].join("\n");
+    const c = el("button", "ghost", "Bestell-Notiz kopieren"); c.type = "button";
+    c.onclick = () => copy(c, note);
+    box.append(c);
+  }
+
   async function search(text) {
     if (busy) return;
-    if (config.needsCode && !teamCode) { $("#codePanel").hidden = false; $("#codeInput").focus(); return; }
     busy = true; $("#sendBtn").disabled = true;
     document.querySelectorAll(".example").forEach((n) => n.remove());
 
     addUserBubble(text);
     const box = el("div", "agent"); $("#feed").append(box);
+    const loc = mode === "fixed" ? fixedLocation : location;
+
+    if (!aiKey) {
+      renderQuick(box, text, loc);
+      box.scrollIntoView({ behavior: "smooth", block: "start" });
+      busy = false; $("#sendBtn").disabled = false;
+      return;
+    }
+
     const prog = el("div", "progress");
-    const working = el("div", "working"); working.append(el("span", "spin"), el("span", null, "Suche läuft …"));
+    const working = el("div", "working"); working.append(el("span", "spin"), el("span", null, "KI-Suche läuft …"));
     const ul = el("ul");
     prog.append(working, ul); box.append(prog);
     box.scrollIntoView({ behavior: "smooth", block: "start" });
 
-    const loc = mode === "fixed" ? fixedLocation : location;
     const body = {
       message: text, history, location: loc, profiles: crew,
       deadline: $("#deadline").value || null,
       budget: $("#budget").value ? `${$("#budget").value} €` : null,
     };
+    const emit = (type, d) => {
+      if (type !== "status") return;
+      const li = el("li"); li.append(el("span", "k", d.kind === "fetch" ? "Quelle" : "sucht"), el("span", "t", d.text || ""));
+      ul.append(li);
+    };
 
     try {
-      const res = await fetch("/api/search", { method: "POST", headers: headers(), body: JSON.stringify(body) });
-      if (!res.ok || !res.body) {
-        const j = await res.json().catch(() => ({}));
-        if (res.status === 401) { teamCode = ""; store.set("teamCode", ""); $("#codePanel").hidden = false; }
-        throw new Error(j.error || `Fehler ${res.status}`);
-      }
-      const reader = res.body.getReader(); const dec = new TextDecoder();
-      let buf = "", out = null;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
-          const ev = /^event: (.*)$/m.exec(chunk)?.[1];
-          const data = /^data: (.*)$/m.exec(chunk)?.[1];
-          if (!ev || !data) continue;
-          const d = JSON.parse(data);
-          if (ev === "status") {
-            const li = el("li"); li.append(el("span", "k", d.kind === "fetch" ? "öffnet" : "sucht"), el("span", "t", d.text || ""));
-            ul.append(li);
-          } else if (ev === "done") out = d;
-          else if (ev === "error") throw new Error(d.error);
-        }
-      }
+      const out = await window.PNFF_AI.aiSearch(aiKey, body, emit);
       working.remove();
       if (ul.children.length) {
-        const n = ul.children.length;
-        const details = el("details"); const s = el("summary", null, `${n} Quellen geprüft`); details.append(s, ul); prog.append(details);
+        const details = el("details"); details.append(el("summary", null, `${ul.children.length} Suchschritte und Quellen`), ul); prog.append(details);
       }
-      if (!out) throw new Error("Keine Antwort erhalten.");
       renderResult(box, out);
       history.push({ role: "user", text });
-      const assistantText = out.result
+      history.push({ role: "assistant", text: out.result
         ? `${out.result.summary}\nOptionen: ${out.result.options.map((o) => `${o.restaurant} (${o.platform}, ${money(o.total, o.currency)})`).join("; ")}`
-        : out.text;
-      history.push({ role: "assistant", text: assistantText });
+        : out.text });
     } catch (err) {
       working.remove();
-      box.append(el("div", "error", err.message || "Etwas ist schiefgelaufen."));
+      box.append(el("div", "error", `${err.message || "Etwas ist schiefgelaufen."} Schnellsuche ohne KI:`));
+      renderQuick(box, text, loc);
     } finally {
       busy = false; $("#sendBtn").disabled = false;
     }
@@ -359,14 +419,22 @@
     msg.value = ""; autoGrow(); $("#pasteInfo").hidden = true;
     search(t);
   };
+  function renderKeyState() {
+    $("#keyState").textContent = aiKey ? "KI-Suche an" : "Schnellsuche";
+    $("#keyState").dataset.on = aiKey ? "1" : "0";
+    $("#keyInput").value = aiKey;
+    $("#keyRemove").hidden = !aiKey;
+  }
+  $("#settingsBtn").onclick = () => { $("#codePanel").hidden = !$("#codePanel").hidden; };
   $("#codeForm").onsubmit = (e) => {
-    e.preventDefault(); teamCode = $("#codeInput").value.trim(); store.set("teamCode", teamCode); $("#codePanel").hidden = true;
+    e.preventDefault(); aiKey = $("#keyInput").value.trim(); store.set("aiKey", aiKey); renderKeyState(); $("#codePanel").hidden = true;
   };
+  $("#keyRemove").onclick = () => { aiKey = ""; store.set("aiKey", ""); renderKeyState(); };
 
   // ---------- Beispiel beim ersten Öffnen ----------
   function renderExample() {
     const feed = $("#feed");
-    const flag = el("div", "example-flag example", "Beispiel – so sieht ein Ergebnis aus");
+    const flag = el("div", "example-flag example", "Beispiel – Ergebnis mit KI-Suche");
     const u = el("div", "msg-user pasted example", "[18:02] Tourmanager: Artist will vegan, Bowl o.ä., bis 19:15 im Backstage\n[18:03] Stage: Crew 6 Leute, Pizza passt\n[18:03] Stage: https://www.lieferando.de/…");
     const box = el("div", "agent example");
     renderResult(box, {
@@ -391,8 +459,7 @@
 
   // ---------- Start ----------
   (async () => {
-    try { config = await (await fetch("/api/config")).json(); } catch {}
-    if (config.needsCode && !teamCode) $("#codePanel").hidden = false;
+    renderKeyState();
     renderCrewChips();
     renderExample();
     setMode(mode);

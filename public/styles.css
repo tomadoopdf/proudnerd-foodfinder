@@ -62,7 +62,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 12px; cursor: pointer;
   font-size: 13px;
 }
-.loc span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.loc span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
+.bar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mode { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.mode [data-on="1"] { color: var(--ok); font-weight: 600; }
+.hint a { color: var(--accent); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot[data-state="live"] { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 2s infinite; }
 .dot[data-state="fixed"] { background: var(--accent); }
@@ -183,6 +187,8 @@ input[type="text"], input[type="password"], input[type="number"], input[type="ti
 
 @media (max-width: 480px) {
   .brand { font-size: 17px; }
+  .brand { font-size: 15px; }
+  .logo { display: none; }
   .name { font-size: 19px; }
   .total { font-size: 19px; }
   .quick { order: 3; flex-basis: 100%; }
