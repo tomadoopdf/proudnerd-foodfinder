@@ -1,7 +1,7 @@
 # ProudNerdFoodfinder
 
 Web-App für Tour-Produktionen: findet kurzfristig Essen per Lieferdienst für Artists und Crew.
-Läuft im Browser auf jedem Handy. Wer sie nutzt, braucht kein Claude-Konto, nur den Link (und ggf. den Team-Code).
+Läuft im Browser auf jedem Handy. Wer sie nutzt, braucht kein Claude-Konto und keinen Account, nur den Link.
 
 ## Was sie kann
 
@@ -17,46 +17,42 @@ Bezahlt und abgeschickt wird die Bestellung in der Lieferdienst-App selbst. Lief
 
 Preise und Bewertungen stammen aus einer Live-Websuche. Jede Option zeigt an, ob die Preise belegt oder geschätzt sind.
 
-## Lokal starten
+## Online stellen (kostenlos, ohne Server)
+
+Die App ist eine reine Webseite und läuft über **GitHub Pages**: 0 €, immer sofort erreichbar.
+
+1. Repository auf **Public** stellen (GitHub Pages ist im Gratisplan nur für öffentliche Repositories verfügbar). In den Dateien stehen keine Schlüssel und keine Daten.
+2. **Settings** → **Pages** → Branch `main`, Ordner `/ (root)` → **Save**.
+3. Nach 1–2 Minuten steht dort der Link, z. B. `https://deinname.github.io/proudnerd-foodfinder/`. Den bekommt das Team. Auf dem Handy über „Zum Home-Bildschirm“ wird daraus ein App-Icon.
+
+## Zwei Suchmodi
+
+| | Schnellsuche | KI-Suche |
+|---|---|---|
+| Schlüssel nötig | nein | kostenloser Google-KI-Schlüssel (aistudio.google.com/apikey) |
+| Wünsche aus Chatverlauf erkennen | ✓ | ✓ |
+| Direkte Suche in allen Lieferdiensten der Region | ✓ | ✓ |
+| Preise, Gebühren, Sterne automatisch vergleichen | – | ✓ |
+
+Den Schlüssel trägt man in der App oben unter „Schnellsuche“ ein. Er bleibt nur auf diesem Handy gespeichert. Kosten entstehen nicht, solange im Google-Konto keine Zahlungsart hinterlegt ist; im Gratistarif sind bis zu 500 KI-Suchen pro Tag möglich.
+
+## Lokal ausprobieren
 
 ```bash
-npm install
-cp .env.example .env    # Gemini-Key eintragen
-node --env-file=.env server.js
+python3 -m http.server 8000
 ```
 
-Dann http://localhost:3000 öffnen. Ohne API-Key ausprobieren: `npm run demo`.
-
-## Online stellen (damit das ganze Team es nutzen kann)
-
-GPS im Browser funktioniert nur über HTTPS, deshalb braucht die App einen Host mit HTTPS. Einfachster Weg:
-
-1. Den Ordner in ein GitHub-Repository hochladen.
-2. Bei **Render.com** (oder Railway, Fly.io) „New Web Service“ → Repository wählen. Build: `npm install`, Start: `node server.js`. Ein Dockerfile liegt auch bei.
-3. Umgebungsvariablen setzen:
-   - `GEMINI_API_KEY`: kostenloser Key aus https://aistudio.google.com/apikey (Google-Konto, keine Kreditkarte)
-   - `TEAM_CODE`: ein Code, den ihr im Team teilt, damit Fremde mit dem Link nicht auf eure Kosten suchen
-4. Den Link ans Team schicken. Auf dem Handy über „Zum Home-Bildschirm“ wird daraus ein App-Icon.
-
-## Einstellungen
-
-| Variable | Bedeutung |
-|---|---|
-| `GEMINI_API_KEY` | Pflicht |
-| `TEAM_CODE` | Zugangscode fürs Team (empfohlen) |
-| `RATE_LIMIT` | Suchen pro Stunde und Gerät, Standard 20 |
-| `FOODFINDER_MODEL` | Standard `gemini-2.5-flash-lite` (einziges Modell mit kostenloser Google-Suche) |
-| `DEMO=1` | Oberfläche mit Beispieldaten, ohne API-Aufrufe |
+Dann http://localhost:8000 öffnen.
 
 ## Kosten und Datenschutz
 
-- Alles kostenlos: Render im Free-Tarif, Google Gemini im kostenlosen Tarif (Google-Suche bis 500 Anfragen pro Tag).
+- Alles kostenlos: GitHub Pages und (optional) Google Gemini im Gratistarif.
 - Im kostenlosen Gemini-Tarif darf Google Anfragen zur Verbesserung seiner Produkte verwenden. Keine sensiblen Daten (Telefonnummern, Gesundheitsdaten außer Allergien) in den Chat kopieren.
-- Render schläft nach 15 Min. ohne Nutzung ein; der erste Aufruf danach dauert ca. 1 Minute.
-- Für die Adresse wird der Standort an OpenStreetMap (Nominatim) geschickt. Rider-Profile bleiben auf dem jeweiligen Handy.
+- Für die Adresse wird der Standort an OpenStreetMap (Nominatim) geschickt. Rider-Profile, Chats und der Schlüssel bleiben auf dem jeweiligen Handy.
 
 ## Dateien
 
-- `server.js`: Webserver, Geocoding, Team-Code, Rate-Limit
-- `agent.js`: der Such-Agent (Prompt, Tools, Ergebnisformat)
-- `public/`: Oberfläche (`index.html`, `styles.css`, `app.js`)
+- `public/index.html`, `public/styles.css`, `public/app.js`: Oberfläche, Standort, Rider
+- `public/quick.js`: Schnellsuche ohne Schlüssel
+- `public/gemini.js`: KI-Suche mit Google Gemini
+- `server.js`, `agent.js`, `render.yaml`: alte Server-Variante für Render (wird nicht gebraucht)
