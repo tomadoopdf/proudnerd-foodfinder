@@ -1,10 +1,32 @@
-// ProudNerdFoodfinder – Such-Agent.
-// Nutzt Claude mit Websuche + Web-Fetch, um Lieferoptionen in der Nähe zu finden,
+// ProudNerdFoodfinder – Such-Agent (kostenlos über Google Gemini).
+// Nutzt Gemini mit Google-Suche + URL-Kontext, um Lieferoptionen in der Nähe zu finden,
 // Preise inkl. Gebühren zu vergleichen und Bewertungen einzubeziehen.
-import Anthropic from "@anthropic-ai/sdk";
+// Kostenloser Tarif: Google-Suche ist bei gemini-2.5-flash-lite bis 500 Anfragen/Tag gratis.
 
-const MODEL = process.env.FOODFINDER_MODEL || "claude-opus-5-5";
-const client = new Anthropic();
+const MODEL = process.env.FOODFINDER_MODEL || "gemini-2.5-flash-lite";
+const API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+const JSON_FORMAT = `{
+  "summary": "1–3 Sätze: Empfehlung und warum",
+  "assumptions": ["Annahme 1", "…"],
+  "people_count": 8,
+  "options": [{
+    "restaurant": "Name",
+    "platform": "Wolt | Lieferando | Uber Eats | … | Direkt",
+    "order_url": "direkter Link zum Laden oder null",
+    "cuisine": "Küche",
+    "serves": 2,
+    "rating": 4.6, "rating_count": 1200, "eta_minutes": 35,
+    "items": [{"name": "Gericht", "qty": 2, "price": 12.9, "for": "Artist"}],
+    "subtotal": 25.8, "delivery_fee": 1.99, "service_fee": 0.99, "total": 28.78,
+    "currency": "EUR",
+    "price_confidence": "belegt | teilweise geschätzt | geschätzt",
+    "tags": ["Beste Wahl", "Günstigste", "Top bewertet", "Schnellste", "vegan ok"],
+    "notes": "Hinweise, z. B. Allergene oder unsichere Werte",
+    "also_on": [{"platform": "Uber Eats", "total": 31.5, "url": null}]
+  }]
+}
+Unbekannte Zahlen als null. "serves" = für wie viele Personen diese Bestellung ist.`;
 
 // Welche Lieferdienste in welchem Land typischerweise aktiv sind (Startpunkt, der Agent prüft live).
 const PLATFORMS_BY_COUNTRY = {
@@ -31,11 +53,13 @@ function systemPrompt() {
 
 So arbeitest du:
 1. Lies die Anfrage. Sie kann frei formuliert sein oder ein eingefügter Chatverlauf (WhatsApp, Slack, Signal …) mit mehreren Personen, Wünschen und Links. Zieh daraus: wer will was, Mengen, Ernährungsform, Allergien, Budget, Deadline, Lieferadresse. Was unklar ist, nimmst du sinnvoll an und schreibst es in "assumptions".
-2. Stehen Links zu Läden im Text, öffne sie mit web_fetch und prüfe Speisekarte, Preise, Mindestbestellwert, Liefergebühr, Bewertung und ob der Laden an die Adresse liefert.
-3. Suche mit web_search nach weiteren passenden Läden in der Nähe des Standorts, auf allen Lieferplattformen, die in der Region aktiv sind. Vergleiche denselben Laden über mehrere Plattformen hinweg, wenn er auf mehreren gelistet ist – die Preise und Gebühren unterscheiden sich oft.
+2. Stehen Links zu Läden im Text, öffne sie über den URL-Kontext und prüfe Speisekarte, Preise, Mindestbestellwert, Liefergebühr, Bewertung und ob der Laden an die Adresse liefert.
+3. Suche mit der Google-Suche nach weiteren passenden Läden in der Nähe des Standorts, auf allen Lieferplattformen, die in der Region aktiv sind. Vergleiche denselben Laden über mehrere Plattformen hinweg, wenn er auf mehreren gelistet ist – die Preise und Gebühren unterscheiden sich oft.
 4. Rechne für jede Option den Endpreis: Summe der Gerichte + Liefergebühr + Servicegebühr + ggf. Aufschlag für Mindestbestellwert. Rechne pro Person.
 5. Bewerte: Preis, Bewertung (Sterne und Anzahl), Lieferzeit, wie gut es zu den Wünschen und Ernährungsvorgaben passt. Bei kurzfristigen Anfragen hat Lieferzeit Vorrang vor ein paar Euro Ersparnis. Unter ca. 4,0 Sternen oder mit sehr wenigen Bewertungen nur empfehlen, wenn es keine Alternative gibt, und das sagen.
-6. Ruf am Ende genau einmal das Tool present_options auf, mit 2 bis 5 Optionen, beste zuerst.
+6. Gib am Ende GENAU EINEN JSON-Block aus (\`\`\`json … \`\`\`), mit 2 bis 5 Optionen, beste zuerst, in diesem Format:
+${JSON_FORMAT}
+Vor dem JSON-Block höchstens zwei kurze Sätze, danach nichts mehr.
 
 Regeln:
 - Erfinde keine Preise, Bewertungen oder Links. Wenn du einen Wert nicht belegen konntest, setz ihn auf null und schreib in "notes", dass er geschätzt bzw. unbekannt ist. Setz "price_confidence" ehrlich.
@@ -45,85 +69,6 @@ Regeln:
 - Antworte auf Deutsch (oder in der Sprache der Anfrage), kurz und sachlich. Kein Smalltalk.
 - Länderhinweise zu Plattformen sind nur ein Startpunkt; prüfe, was vor Ort wirklich liefert.`;
 }
-
-const presentOptionsTool = {
-  name: "present_options",
-  description:
-    "Gibt die verglichenen Lieferoptionen strukturiert an die App zurück. Genau einmal am Ende aufrufen.",
-  strict: true,
-  input_schema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["summary", "assumptions", "people_count", "options"],
-    properties: {
-      summary: { type: "string", description: "1–3 Sätze: Empfehlung und warum." },
-      assumptions: { type: "array", items: { type: "string" } },
-      people_count: { type: "integer" },
-      options: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: [
-            "restaurant", "platform", "order_url", "cuisine", "serves", "rating", "rating_count",
-            "eta_minutes", "items", "subtotal", "delivery_fee", "service_fee", "total",
-            "currency", "price_confidence", "tags", "notes", "also_on",
-          ],
-          properties: {
-            restaurant: { type: "string" },
-            platform: { type: "string", description: "z. B. Wolt, Lieferando, Uber Eats, Direkt" },
-            order_url: { type: ["string", "null"] },
-            cuisine: { type: "string" },
-            serves: { type: "integer", description: "Für wie viele Personen diese Bestellung ist" },
-            rating: { type: ["number", "null"], description: "Sterne 0–5" },
-            rating_count: { type: ["integer", "null"] },
-            eta_minutes: { type: ["integer", "null"] },
-            items: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["name", "qty", "price", "for"],
-                properties: {
-                  name: { type: "string" },
-                  qty: { type: "integer" },
-                  price: { type: ["number", "null"], description: "Einzelpreis" },
-                  for: { type: "string", description: "Für wen, z. B. 'Artist', 'Crew', Name" },
-                },
-              },
-            },
-            subtotal: { type: ["number", "null"] },
-            delivery_fee: { type: ["number", "null"] },
-            service_fee: { type: ["number", "null"] },
-            total: { type: ["number", "null"] },
-            currency: { type: "string", description: "ISO-Code, z. B. EUR" },
-            price_confidence: { type: "string", enum: ["belegt", "teilweise geschätzt", "geschätzt"] },
-            tags: {
-              type: "array",
-              items: { type: "string" },
-              description: "Kurze Labels: 'Beste Wahl', 'Günstigste', 'Top bewertet', 'Schnellste', 'vegan ok' …",
-            },
-            notes: { type: "string" },
-            also_on: {
-              type: "array",
-              description: "Gleicher Laden auf anderen Plattformen mit Gesamtpreis",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["platform", "total", "url"],
-                properties: {
-                  platform: { type: "string" },
-                  total: { type: ["number", "null"] },
-                  url: { type: ["string", "null"] },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-};
 
 function describeLocation(loc) {
   if (!loc) return "Standort unbekannt – frag nach oder nimm die Stadt aus der Nachricht.";
@@ -155,6 +100,9 @@ function describeProfiles(profiles) {
  * history: [{role:"user"|"assistant", text}] – frühere Runden als reiner Text.
  */
 export async function runSearch({ message, history = [], location, profiles, budget, deadline }, emit) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY fehlt auf dem Server.");
+
   const now = new Date().toLocaleString("de-DE", { timeZone: location?.timezone || "Europe/Berlin" });
   const context =
     `Ortszeit: ${now}\n` +
@@ -163,80 +111,93 @@ export async function runSearch({ message, history = [], location, profiles, bud
     (budget ? `Budget gesamt: ${budget}\n` : "") +
     `Rider & Crew-Profile:\n${describeProfiles(profiles)}`;
 
-  const messages = [];
+  const turns = [];
   for (const h of history.slice(-8)) {
     if (!h.text) continue;
-    messages.push({ role: h.role === "assistant" ? "assistant" : "user", content: h.text });
+    turns.push({ type: h.role === "assistant" ? "model_output" : "user_input", content: [{ type: "text", text: h.text }] });
   }
-  // Rollen müssen abwechseln und mit user beginnen
-  while (messages.length && messages[0].role !== "user") messages.shift();
-  const userContent = `${context}\n\n--- Anfrage ---\n${message}`;
-  if (messages.length && messages[messages.length - 1].role === "user") {
-    messages[messages.length - 1].content += `\n\n${userContent}`;
-  } else {
-    messages.push({ role: "user", content: userContent });
+  turns.push({ type: "user_input", content: [{ type: "text", text: `${context}\n\n--- Anfrage ---\n${message}` }] });
+
+  emit("status", { kind: "search", text: `Google-Suche rund um ${location?.city || "den Standort"} …` });
+
+  const body = {
+    model: MODEL,
+    system_instruction: systemPrompt(),
+    input: turns,
+    tools: [{ type: "google_search" }, { type: "url_context" }],
+    generation_config: { max_output_tokens: 8192 },
+    store: false,
+  };
+
+  const call = (b) => fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key, "Api-Revision": "2026-05-20" },
+    body: JSON.stringify(b),
+  });
+  let r = await call(body);
+  let data = await r.json().catch(() => ({}));
+  // Falls das Modell den URL-Kontext nicht kombinieren kann: nur mit Google-Suche erneut
+  if (r.status === 400) {
+    console.warn("Gemini 400, versuche ohne url_context:", data?.error?.message);
+    r = await call({ ...body, tools: [{ type: "google_search" }] });
+    data = await r.json().catch(() => ({}));
+  }
+  if (!r.ok) {
+    const msg = data?.error?.message || `Google-API Fehler ${r.status}`;
+    if (r.status === 429) throw new Error("Tageslimit der kostenlosen Google-Suche erreicht oder zu viele Anfragen auf einmal. Kurz warten.");
+    throw new Error(msg);
   }
 
-  const userLocation = { type: "approximate" };
-  if (location?.city) userLocation.city = location.city;
-  if (location?.country_code) userLocation.country = location.country_code.toUpperCase();
-  if (location?.region) userLocation.region = location.region;
-  if (location?.timezone) userLocation.timezone = location.timezone;
-
-  const tools = [
-    { type: "web_search_20260209", name: "web_search", max_uses: 10, user_location: userLocation },
-    { type: "web_fetch_20260209", name: "web_fetch", max_uses: 10, max_content_tokens: 20000 },
-    presentOptionsTool,
-  ];
-
-  let result = null;
-  let finalText = "";
-
-  for (let turn = 0; turn < 6; turn++) {
-    const stream = client.beta.messages.stream({
-      model: MODEL,
-      max_tokens: 64000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium" },
-      system: systemPrompt(),
-      tools,
-      messages,
-    });
-
-    stream.on("contentBlock", (block) => {
-      if (block.type === "server_tool_use") {
-        if (block.name === "web_search") emit("status", { kind: "search", text: block.input?.query });
-        if (block.name === "web_fetch") emit("status", { kind: "fetch", text: block.input?.url });
+  // Suchanfragen und Quellen für die Fortschrittsanzeige
+  const steps = data.steps || [];
+  let text = "";
+  for (const st of steps) {
+    if (st.type === "google_search_call") for (const q of st.arguments?.queries || []) emit("status", { kind: "search", text: q });
+    if (st.type === "url_context_call") for (const u of st.arguments?.urls || []) emit("status", { kind: "fetch", text: u });
+    if (st.type === "model_output") {
+      for (const c of st.content || []) {
+        if (c.type !== "text") continue;
+        text += c.text;
+        for (const a of c.annotations || []) if (a.type === "url_citation" && a.url) emit("status", { kind: "fetch", text: a.title || a.url });
       }
-    });
-    stream.on("text", (delta) => emit("delta", { text: delta }));
-
-    const msg = await stream.finalMessage();
-
-    if (msg.stop_reason === "refusal") {
-      throw new Error("Die Anfrage wurde abgelehnt. Bitte anders formulieren.");
     }
-
-    messages.push({ role: "assistant", content: msg.content });
-    finalText = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("\n").trim() || finalText;
-
-    if (msg.stop_reason === "pause_turn") continue;
-
-    const toolUse = msg.content.find((b) => b.type === "tool_use" && b.name === "present_options");
-    if (toolUse) {
-      result = toolUse.input;
-      break;
-    }
-    if (msg.stop_reason === "max_tokens") {
-      throw new Error("Antwort war zu lang und wurde abgeschnitten. Bitte Anfrage aufteilen.");
-    }
-    // end_turn ohne Tool: Rückfrage oder reine Textantwort
-    break;
   }
+  if (!text && data.output_text) text = data.output_text;
 
-  return { result, text: finalText };
+  const result = parseResult(text);
+  const prose = text.replace(/```json[\s\S]*?```/g, "").trim();
+  return { result, text: result ? "" : prose || "Keine Antwort erhalten." };
+}
+
+function parseResult(text) {
+  const m = /```json\s*([\s\S]*?)```/.exec(text) || /(\{[\s\S]*"options"[\s\S]*\})/.exec(text);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[1]);
+    if (!Array.isArray(j.options) || !j.options.length) return null;
+    const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+    j.summary = String(j.summary || "");
+    j.assumptions = Array.isArray(j.assumptions) ? j.assumptions.map(String) : [];
+    j.people_count = num(j.people_count) || 1;
+    j.options = j.options.map((o) => ({
+      restaurant: String(o.restaurant || "Unbekannt"),
+      platform: String(o.platform || ""),
+      order_url: typeof o.order_url === "string" ? o.order_url : null,
+      cuisine: String(o.cuisine || ""),
+      serves: num(o.serves),
+      rating: num(o.rating), rating_count: num(o.rating_count), eta_minutes: num(o.eta_minutes),
+      items: (Array.isArray(o.items) ? o.items : []).map((i) => ({ name: String(i.name || ""), qty: num(i.qty) || 1, price: num(i.price), for: String(i.for || "") })),
+      subtotal: num(o.subtotal), delivery_fee: num(o.delivery_fee), service_fee: num(o.service_fee), total: num(o.total),
+      currency: /^[A-Z]{3}$/.test(o.currency || "") ? o.currency : "EUR",
+      price_confidence: ["belegt", "teilweise geschätzt", "geschätzt"].includes(o.price_confidence) ? o.price_confidence : "geschätzt",
+      tags: Array.isArray(o.tags) ? o.tags.map(String) : [],
+      notes: String(o.notes || ""),
+      also_on: (Array.isArray(o.also_on) ? o.also_on : []).map((a) => ({ platform: String(a.platform || ""), total: num(a.total), url: typeof a.url === "string" ? a.url : null })),
+    }));
+    return j;
+  } catch {
+    return null;
+  }
 }
 
 // Demo-Antwort ohne API-Aufruf (DEMO=1), zum Ausprobieren der Oberfläche.

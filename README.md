@@ -21,7 +21,7 @@ Preise und Bewertungen stammen aus einer Live-Websuche. Jede Option zeigt an, ob
 
 ```bash
 npm install
-cp .env.example .env    # API-Key eintragen
+cp .env.example .env    # Gemini-Key eintragen
 node --env-file=.env server.js
 ```
 
@@ -34,7 +34,7 @@ GPS im Browser funktioniert nur über HTTPS, deshalb braucht die App einen Host 
 1. Den Ordner in ein GitHub-Repository hochladen.
 2. Bei **Render.com** (oder Railway, Fly.io) „New Web Service“ → Repository wählen. Build: `npm install`, Start: `node server.js`. Ein Dockerfile liegt auch bei.
 3. Umgebungsvariablen setzen:
-   - `ANTHROPIC_API_KEY`: API-Key aus https://console.anthropic.com
+   - `GEMINI_API_KEY`: kostenloser Key aus https://aistudio.google.com/apikey (Google-Konto, keine Kreditkarte)
    - `TEAM_CODE`: ein Code, den ihr im Team teilt, damit Fremde mit dem Link nicht auf eure Kosten suchen
 4. Den Link ans Team schicken. Auf dem Handy über „Zum Home-Bildschirm“ wird daraus ein App-Icon.
 
@@ -42,15 +42,17 @@ GPS im Browser funktioniert nur über HTTPS, deshalb braucht die App einen Host 
 
 | Variable | Bedeutung |
 |---|---|
-| `ANTHROPIC_API_KEY` | Pflicht |
+| `GEMINI_API_KEY` | Pflicht |
 | `TEAM_CODE` | Zugangscode fürs Team (empfohlen) |
 | `RATE_LIMIT` | Suchen pro Stunde und Gerät, Standard 20 |
-| `FOODFINDER_MODEL` | Standard `claude-opus-5-5` |
+| `FOODFINDER_MODEL` | Standard `gemini-2.5-flash-lite` (einziges Modell mit kostenloser Google-Suche) |
 | `DEMO=1` | Oberfläche mit Beispieldaten, ohne API-Aufrufe |
 
 ## Kosten und Datenschutz
 
-- Eine Suche nutzt Claude mit Websuche und kostet je nach Umfang grob 0,50 bis 2 € (viele geöffnete Links = teurer). Im Anthropic-Dashboard lässt sich ein Monatslimit setzen.
+- Alles kostenlos: Render im Free-Tarif, Google Gemini im kostenlosen Tarif (Google-Suche bis 500 Anfragen pro Tag).
+- Im kostenlosen Gemini-Tarif darf Google Anfragen zur Verbesserung seiner Produkte verwenden. Keine sensiblen Daten (Telefonnummern, Gesundheitsdaten außer Allergien) in den Chat kopieren.
+- Render schläft nach 15 Min. ohne Nutzung ein; der erste Aufruf danach dauert ca. 1 Minute.
 - Für die Adresse wird der Standort an OpenStreetMap (Nominatim) geschickt. Rider-Profile bleiben auf dem jeweiligen Handy.
 
 ## Dateien
