@@ -77,12 +77,20 @@
   // Ein Suchbegriff pro Wunsch: Zeilen mit Küche (und Ernährung aus derselben Zeile) werden getrennt gesucht
   function searchTerms(p, text, profiles) {
     const terms = [];
-    const lines = p.wishes.length ? p.wishes.map((w) => w.text) : text.split("\n");
-    for (const line of lines) {
-      const cs = CUISINES.filter((c) => new RegExp(`\\b${c}`, "i").test(line));
-      if (!cs.length) continue;
-      const ds = DIETS.filter(([re]) => re.test(line)).map(([, n]) => n);
-      terms.push([...cs.slice(0, 2), ...ds.slice(0, 1)].join(" "));
+    const base = (p.wishes.length ? p.wishes.map((w) => w.text) : text.split("\n"));
+    const has = (str) => CUISINES.filter((c) => new RegExp(`\\b${c}`, "i").test(str));
+    const dietsIn = (str) => DIETS.filter(([re]) => re.test(str)).map(([, n]) => n);
+    for (const line of base) {
+      const all = has(line);
+      if (!all.length) continue;
+      // Mehrere Küchen in einer Zeile ("Crew Burger, Artist Sushi") -> an Komma/und trennen
+      const segs = all.length > 1 ? line.split(/[,;]| und | and /i) : [line];
+      for (const seg of segs) {
+        const cs = has(seg);
+        if (!cs.length) continue;
+        const ds = dietsIn(seg).length ? dietsIn(seg) : (segs.length === 1 ? dietsIn(line) : []);
+        terms.push([...cs.slice(0, 2), ...ds.slice(0, 1)].join(" "));
+      }
     }
     if (!terms.length) {
       const diets = new Set(p.diets);
