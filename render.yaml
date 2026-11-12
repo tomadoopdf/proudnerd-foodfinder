@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: proudnerd-foodfinder
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TEAM_CODE
+        sync: false
